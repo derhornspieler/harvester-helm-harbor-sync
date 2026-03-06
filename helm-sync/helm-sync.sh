@@ -173,8 +173,8 @@ handle_connection() {
         esac
     done
 
-    local method path
-    read -r method path _ <<< "$first_line"
+    local method path _rest
+    read -r method path _rest <<< "$first_line"
 
     case "$path" in
         /sync)
@@ -196,8 +196,8 @@ handle_connection() {
                 return 0
             }
 
-            local source manifest_ver harbor_project manifest_chart env_var
-            IFS='|' read -r source manifest_ver harbor_project manifest_chart env_var <<< "$entry"
+            local source _manifest_ver harbor_project manifest_chart _env_var
+            IFS='|' read -r source _manifest_ver harbor_project manifest_chart _env_var <<< "$entry"
 
             sync_chart "$source" "$version" "$harbor_project" "$chart_name" &
             ;;

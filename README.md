@@ -1,5 +1,7 @@
 # Harvester Helm Harbor Sync
 
+[![CI](https://github.com/derhornspieler/harvester-helm-harbor-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/derhornspieler/harvester-helm-harbor-sync/actions/workflows/ci.yml)
+
 Nginx reverse proxy with automatic Helm chart synchronization to Harbor. Proxies upstream Helm HTTP repositories and automatically pushes downloaded charts to Harbor as OCI artifacts via a lightweight bash sidecar. Designed for air-gapped and semi-connected Kubernetes environments running on Harvester.
 
 ## Architecture

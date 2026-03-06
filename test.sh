@@ -208,10 +208,10 @@ run_test "Registry catalog endpoint" bash -c "
 echo ""
 echo -e "${BOLD}--- Terraform Provider Mirror ---${NC}"
 
-if [[ -f "$HOME/.terraformrc" ]] && grep -q "filesystem_mirror" "$HOME/.terraformrc" 2>/dev/null; then
-  run_test "~/.terraformrc has filesystem_mirror" true
+if [[ -f "${HOME}/.terraformrc" ]] && grep -q "filesystem_mirror" "${HOME}/.terraformrc" 2>/dev/null; then
+  run_test "${HOME}/.terraformrc has filesystem_mirror" true
 else
-  run_test "~/.terraformrc has filesystem_mirror" false
+  run_test "${HOME}/.terraformrc has filesystem_mirror" false
 fi
 
 # ---- 9. validate_airgapped_prereqs() simulation ----
