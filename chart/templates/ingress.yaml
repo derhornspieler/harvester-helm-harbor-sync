@@ -1,0 +1,54 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "helm-harbor-sync.fullname" . }}
+  labels:
+    {{- include "helm-harbor-sync.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - secretName: {{ .Values.ingress.tls.secretName }}
+      hosts:
+        - yum.{{ .Values.domain }}
+        - apt.{{ .Values.domain }}
+        - dl.{{ .Values.domain }}
+        - charts.{{ .Values.domain }}
+        - bin.{{ .Values.domain }}
+        {{- if .Values.registry.enabled }}
+        - registry.{{ .Values.domain }}
+        {{- end }}
+  {{- end }}
+  rules:
+    {{- range list "yum" "apt" "dl" "charts" "bin" }}
+    - host: {{ . }}.{{ $.Values.domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "helm-harbor-sync.fullname" $ }}-proxy
+                port:
+                  name: http
+    {{- end }}
+    {{- if .Values.registry.enabled }}
+    - host: registry.{{ .Values.domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "helm-harbor-sync.fullname" . }}-registry
+                port:
+                  name: registry
+    {{- end }}
+{{- end }}

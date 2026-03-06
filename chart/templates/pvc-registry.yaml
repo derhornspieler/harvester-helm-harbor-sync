@@ -1,0 +1,17 @@
+{{- if .Values.registry.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "helm-harbor-sync.fullname" . }}-registry
+  labels:
+    {{- include "helm-harbor-sync.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.registry.storage.size }}
+  {{- if .Values.registry.storage.storageClass }}
+  storageClassName: {{ .Values.registry.storage.storageClass | quote }}
+  {{- end }}
+{{- end }}

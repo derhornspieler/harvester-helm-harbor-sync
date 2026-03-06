@@ -1,0 +1,58 @@
+{{- if .Values.registry.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helm-harbor-sync.fullname" . }}-registry
+  labels:
+    {{- include "helm-harbor-sync.labels" . | nindent 4 }}
+    app.kubernetes.io/component: registry
+spec:
+  replicas: {{ .Values.registry.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "helm-harbor-sync.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: registry
+  template:
+    metadata:
+      labels:
+        {{- include "helm-harbor-sync.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: registry
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-registry.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: registry
+          image: {{ .Values.registry.image }}
+          ports:
+            - name: registry
+              containerPort: 5000
+              protocol: TCP
+          volumeMounts:
+            - name: registry-config
+              mountPath: /etc/docker/registry/config.yml
+              subPath: config.yml
+              readOnly: true
+            - name: registry-data
+              mountPath: /var/lib/registry
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.registry.resources | nindent 12 }}
+      volumes:
+        - name: registry-config
+          configMap:
+            name: {{ include "helm-harbor-sync.fullname" . }}-registry
+        - name: registry-data
+          persistentVolumeClaim:
+            claimName: {{ include "helm-harbor-sync.fullname" . }}-registry
+{{- end }}

@@ -147,18 +147,64 @@ docker compose up -d
 ./test.sh
 ```
 
-## Deploy to a Remote VM
+## Deployment Options
+
+### Option A: Docker Compose (VM)
+
+Deploy to a dedicated VM via SSH or Terraform:
 
 ```bash
-# Provision a dedicated proxy VM via SSH
+# Via SSH
 ./setup-proxy-vm.sh <proxy-vm-ip> --domain yourdomain.com --ssh-user rocky
 
-# Or provision on Harvester via Terraform
+# Or via Terraform on Harvester
 cd terraform
 cp terraform.tfvars.example terraform.tfvars
 vi terraform.tfvars
 terraform init && terraform apply
 ```
+
+### Option B: Kubernetes (Helm Chart)
+
+Deploy directly to a Kubernetes cluster. nginx runs behind an Ingress controller, with helm-sync as a sidecar container in the same pod.
+
+```bash
+# Install with custom values
+helm install proxy ./chart \
+  --namespace proxy-cache --create-namespace \
+  --set domain=yourdomain.com \
+  --set harbor.host=harbor.yourdomain.com \
+  --set harbor.user='robot$helm-sync' \
+  --set harbor.pass=YOUR_PASSWORD \
+  --set proxy.image.helmSync.repository=your-registry/helm-sync \
+  --set ingress.className=nginx \
+  --set ingress.tls.secretName=proxy-tls-cert
+
+# Or use a values file
+helm install proxy ./chart \
+  --namespace proxy-cache --create-namespace \
+  -f my-values.yaml
+```
+
+**Prerequisites for Helm deployment:**
+- A Kubernetes Ingress controller (e.g., ingress-nginx)
+- A TLS Secret for `*.yourdomain.com` (or individual SANs)
+- The `helm-sync` container image built and pushed to an accessible registry
+- DNS or wildcard DNS pointing `*.yourdomain.com` to the Ingress
+
+**Build the helm-sync image:**
+
+```bash
+docker build -t your-registry/helm-sync:latest ./helm-sync
+docker push your-registry/helm-sync:latest
+```
+
+**Key differences from VM deployment:**
+- TLS is handled by the Ingress controller, not nginx
+- nginx listens on HTTP (:8080) internally
+- helm-sync is a sidecar in the nginx pod (communicates via `localhost:8888`)
+- Chart repos are configured in `values.yaml` — adding a new repo is a `helm upgrade`
+- Cache volumes use Kubernetes PVCs
 
 ## Configuration
 

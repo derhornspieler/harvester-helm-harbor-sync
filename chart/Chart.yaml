@@ -1,0 +1,14 @@
+apiVersion: v2
+name: harvester-helm-harbor-sync
+description: Nginx reverse proxy with automatic Helm chart synchronization to Harbor
+version: 0.1.0
+appVersion: "1.0.0"
+type: application
+keywords:
+  - helm
+  - harbor
+  - proxy
+  - airgap
+  - cache
+maintainers:
+  - name: derhornspieler

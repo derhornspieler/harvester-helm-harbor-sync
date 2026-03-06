@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "helm-harbor-sync.fullname" . }}-charts-manifest
+  labels:
+    {{- include "helm-harbor-sync.labels" . | nindent 4 }}
+data:
+  charts.manifest: |
+    {{- include "helm-harbor-sync.chartsManifest" . | nindent 4 }}
