@@ -5,22 +5,24 @@ Nginx reverse proxy with automatic Helm chart synchronization to Harbor. Proxies
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────────────────────────────────┐
-│   Client         │     │  Proxy VM (docker-compose)                   │
-│                 │     │                                              │
-│ helm repo add   │────▶│  nginx:443 (TLS termination + caching)       │
-│ helm pull       │     │    yum.$DOMAIN   → Rocky/RKE2 RPMs          │
-│ yum install     │     │    apt.$DOMAIN   → Debian/Ubuntu APT        │
-│ curl ...        │     │    dl.$DOMAIN    → Cloud images (qcow2)     │
-│                 │────▶│    charts.$DOMAIN → 11 Helm HTTP repos      │
-│                 │     │      └── mirror ──▶ helm-sync:8888 (sidecar)│
-│                 │     │                      └── push to Harbor OCI  │
-│                 │     │    bin.$DOMAIN   → Static GitHub binaries    │
-│                 │     │    harbor.$DOMAIN → Harbor TLS termination   │
-│                 │────▶│  registry:5000                               │
+┌─────────────────┐     ┌──────────────────────────────────────────────┐     ┌─────────────┐
+│   Client         │     │  Proxy VM (docker-compose)                   │     │  Harbor      │
+│                 │     │                                              │     │  (external)  │
+│ helm repo add   │────▶│  nginx:443 (TLS termination + caching)       │     │              │
+│ helm pull       │     │    yum.$DOMAIN   → Rocky/RKE2 RPMs          │     │  OCI chart   │
+│ yum install     │     │    apt.$DOMAIN   → Debian/Ubuntu APT        │     │  storage     │
+│ curl ...        │     │    dl.$DOMAIN    → Cloud images (qcow2)     │     │              │
+│                 │────▶│    charts.$DOMAIN → 11 Helm HTTP repos      │     │  Proxy-cache │
+│                 │     │      └── mirror ──▶ helm-sync:8888 (sidecar)│────▶│  for OCI     │
+│                 │     │                      └── push to Harbor OCI  │     │  registries  │
+│                 │     │    bin.$DOMAIN   → Static GitHub binaries    │     │              │
+│                 │────▶│  registry:5000                               │     └─────────────┘
 │                 │     │    Bootstrap container images (Docker v2)     │
 └─────────────────┘     └──────────────────────────────────────────────┘
 ```
+
+> **Note:** Harbor is an external dependency — it does not run on the proxy VM.
+> The proxy VM only runs nginx, the helm-sync sidecar, and a bootstrap Docker registry.
 
 ## How It Works
 
@@ -107,7 +109,7 @@ flowchart LR
 
 - **Docker** with Compose plugin (v2)
 - **openssl** for certificate generation
-- **Harbor** instance (for OCI chart storage)
+- **Harbor** instance (external — for OCI chart storage and proxy-cache)
 - A **root CA** certificate and key (for generating the proxy's intermediate CA)
 - DNS or `/etc/hosts` entries pointing `*.$DOMAIN` to the proxy VM
 
@@ -131,7 +133,7 @@ vi .env                            # Set your domain, Harbor creds, etc.
 
 # 5. Add /etc/hosts entries (or configure DNS)
 DOMAIN=$(grep DOMAIN .env | cut -d= -f2)
-echo "127.0.0.1  yum.${DOMAIN} apt.${DOMAIN} dl.${DOMAIN} charts.${DOMAIN} bin.${DOMAIN} harbor.${DOMAIN}" \
+echo "127.0.0.1  yum.${DOMAIN} apt.${DOMAIN} dl.${DOMAIN} charts.${DOMAIN} bin.${DOMAIN}" \
   | sudo tee -a /etc/hosts
 
 # 6. Trust the CA
@@ -165,10 +167,9 @@ All settings live in `.env` (copy from `.env.example`):
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DOMAIN` | Base domain for all proxy hostnames | `example.com` |
-| `HARBOR_HOST` | Harbor registry hostname | `harbor.example.com` |
+| `HARBOR_HOST` | External Harbor registry hostname | `harbor.example.com` |
 | `HARBOR_USER` | Harbor robot account username | `robot$helm-sync` |
 | `HARBOR_PASS` | Harbor robot account password | _(required)_ |
-| `HARBOR_BACKEND` | Harbor HTTP backend IP/host (for TLS termination) | `harbor-backend` |
 | `PROXY_VM_IP` | Static IP for the proxy VM | `10.0.0.100` |
 | `SSH_USER` | SSH user for VM provisioning | `rocky` |
 | `PKI_DIR` | Path to root CA cert/key directory | `./pki` |
@@ -192,8 +193,7 @@ After changing `.env`, run `./scripts/configure.sh` to apply the domain to nginx
 │   │   ├── apt.conf                # Debian / Ubuntu APT repos
 │   │   ├── dl.conf                 # Cloud images (qcow2, ISOs)
 │   │   ├── charts.conf             # 11 Helm HTTP chart repos (with mirror)
-│   │   ├── bin.conf                # Static binary files
-│   │   └── harbor.conf             # Harbor TLS termination
+│   │   └── bin.conf                # Static binary files
 │   └── includes/
 │       ├── ssl-defaults.conf       # Shared TLS settings
 │       ├── proxy-defaults.conf     # Shared proxy headers/timeouts
@@ -241,7 +241,7 @@ After changing `.env`, run `./scripts/configure.sh` to apply the domain to nginx
 
 ### nginx (Reverse Proxy)
 
-Six virtual hosts behind TLS, all sharing the same wildcard certificate:
+Five virtual hosts behind TLS, all sharing the same multi-SAN certificate:
 
 | Virtual Host | Upstream | Cache |
 |-------------|----------|-------|
@@ -250,7 +250,6 @@ Six virtual hosts behind TLS, all sharing the same wildcard certificate:
 | `dl.$DOMAIN` | Rocky 9 cloud images (qcow2) | 30 GB, 30-day TTL |
 | `charts.$DOMAIN` | 11 Helm HTTP chart repos (see below) | 2 GB, 1-day TTL |
 | `bin.$DOMAIN` | Pre-downloaded GitHub release binaries (static) | Client-side only |
-| `harbor.$DOMAIN` | Harbor HTTP backend → TLS termination | No cache |
 
 ### helm-sync (Sidecar)
 
@@ -404,7 +403,7 @@ Save the returned `secret` as `HARBOR_PASS` in your `.env`. The username will be
 Root CA (offline, long-lived)
 └── Proxy Intermediate CA (5yr, RSA-4096, pathlen:0)
     └── *.$DOMAIN leaf (1yr, ECDSA P-256)
-        SANs: yum, apt, dl, charts, bin, harbor
+        SANs: yum, apt, dl, charts, bin
 ```
 
 The CA chain (`certs/ca-chain.pem`) must be trusted by all clients. For Kubernetes nodes, inject it via cloud-init or distribute it as part of your node provisioning.

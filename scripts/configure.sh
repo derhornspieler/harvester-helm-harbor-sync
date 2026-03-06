@@ -18,7 +18,6 @@ set +a
 
 DOMAIN="${DOMAIN:-example.com}"
 HARBOR_HOST="${HARBOR_HOST:-harbor.example.com}"
-HARBOR_BACKEND="${HARBOR_BACKEND:-harbor-backend}"
 
 echo "Configuring for domain: ${DOMAIN}"
 echo "Harbor host: ${HARBOR_HOST}"
@@ -27,10 +26,6 @@ echo ""
 # Replace domain in nginx configs
 find "${PROJECT_DIR}/nginx" -name '*.conf' -exec \
     sed -i "s/example\.com/${DOMAIN}/g" {} +
-
-# Replace harbor backend
-sed -i "s/harbor-backend/${HARBOR_BACKEND}/g" \
-    "${PROJECT_DIR}/nginx/conf.d/harbor.conf"
 
 # Replace domain in helm manifest
 sed -i "s/charts\.example\.com/charts.${DOMAIN}/g" \
