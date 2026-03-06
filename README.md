@@ -4,25 +4,110 @@ Nginx reverse proxy with automatic Helm chart synchronization to Harbor. Proxies
 
 ## Architecture
 
-```
-┌─────────────────┐     ┌──────────────────────────────────────────────┐     ┌─────────────┐
-│   Client         │     │  Proxy VM (docker-compose)                   │     │  Harbor      │
-│                 │     │                                              │     │  (external)  │
-│ helm repo add   │────▶│  nginx:443 (TLS termination + caching)       │     │              │
-│ helm pull       │     │    yum.$DOMAIN   → Rocky/RKE2 RPMs          │     │  OCI chart   │
-│ yum install     │     │    apt.$DOMAIN   → Debian/Ubuntu APT        │     │  storage     │
-│ curl ...        │     │    dl.$DOMAIN    → Cloud images (qcow2)     │     │              │
-│                 │────▶│    charts.$DOMAIN → 11 Helm HTTP repos      │     │  Proxy-cache │
-│                 │     │      └── mirror ──▶ helm-sync:8888 (sidecar)│────▶│  for OCI     │
-│                 │     │                      └── push to Harbor OCI  │     │  registries  │
-│                 │     │    bin.$DOMAIN   → Static GitHub binaries    │     │              │
-│                 │────▶│  registry:5000                               │     └─────────────┘
-│                 │     │    Bootstrap container images (Docker v2)     │
-└─────────────────┘     └──────────────────────────────────────────────┘
+```mermaid
+graph LR
+    subgraph Clients
+        C1[helm pull / repo add]
+        C2[yum install / apt-get]
+        C3[curl / wget]
+    end
+
+    subgraph Proxy["Proxy (VM or K8s Pod)"]
+        direction TB
+        NG[nginx<br/>caching reverse proxy]
+        HS[helm-sync sidecar<br/>ncat :8888]
+        REG[registry:5000<br/>bootstrap images]
+    end
+
+    subgraph Upstream["Internet (Upstream)"]
+        HR[Helm HTTP Repos<br/>jetstack, hashicorp, ...]
+        RPM[RPM / APT Repos<br/>Rocky, EPEL, Debian]
+        DL[Cloud Images<br/>qcow2, ISOs]
+    end
+
+    subgraph Harbor["Harbor (External)"]
+        OCI[OCI Artifact Storage<br/>charts.jetstack.io/cert-manager]
+        PC[Proxy-Cache<br/>ghcr.io, docker.io, ...]
+    end
+
+    C1 & C2 & C3 -->|HTTPS| NG
+    NG -->|proxy_pass| HR & RPM & DL
+    NG -.->|mirror<br/>fire-and-forget| HS
+    HS -->|helm push<br/>OCI artifact| OCI
+    C1 -->|helm pull oci://| PC
+
+    style NG fill:#2d6a4f,color:#fff
+    style HS fill:#264653,color:#fff
+    style OCI fill:#e76f51,color:#fff
+    style PC fill:#e76f51,color:#fff
 ```
 
-> **Note:** Harbor is an external dependency — it does not run on the proxy VM.
-> The proxy VM only runs nginx, the helm-sync sidecar, and a bootstrap Docker registry.
+> **Harbor is external** — it does not run on the proxy. The proxy only runs nginx, the helm-sync sidecar, and an optional bootstrap Docker registry.
+
+### VM Deployment (docker-compose)
+
+```mermaid
+graph TB
+    subgraph VM["Proxy VM"]
+        subgraph DC["docker-compose"]
+            N443["nginx:443<br/>TLS termination + caching"]
+            HSC["helm-sync:8888<br/>ncat listener"]
+            R5000["registry:5000<br/>Docker Distribution v2"]
+        end
+        CERTS["TLS certs<br/>*.DOMAIN leaf"]
+        CACHE["Docker volumes<br/>rpm, charts, downloads"]
+    end
+
+    N443 ---|docker DNS| HSC
+    N443 --- CERTS
+    N443 --- CACHE
+
+    EXT_HARBOR["Harbor (external)"]
+    HSC -->|helm push| EXT_HARBOR
+
+    style N443 fill:#2d6a4f,color:#fff
+    style HSC fill:#264653,color:#fff
+    style EXT_HARBOR fill:#e76f51,color:#fff
+```
+
+### Kubernetes Deployment (Helm chart)
+
+```mermaid
+graph TB
+    subgraph K8s["Kubernetes Cluster"]
+        ING["Ingress Controller<br/>TLS termination"]
+        subgraph Pod["Proxy Pod (sidecar pattern)"]
+            N8080["nginx :8080<br/>HTTP only, caching"]
+            HS8888["helm-sync :8888<br/>localhost sidecar"]
+        end
+        SVC["Service :80"]
+        PVC["PVCs<br/>rpm, charts, downloads"]
+        CM["ConfigMaps<br/>nginx configs, manifest"]
+        SEC["Secret<br/>Harbor credentials"]
+
+        subgraph RegPod["Registry Pod (optional)"]
+            R5000K["registry :5000"]
+        end
+        RPVC["PVC<br/>registry-data"]
+    end
+
+    ING -->|*.DOMAIN| SVC
+    SVC --> N8080
+    N8080 ---|localhost| HS8888
+    N8080 --- PVC
+    N8080 --- CM
+    HS8888 --- SEC
+    HS8888 --- CM
+    R5000K --- RPVC
+
+    EXT_HARBOR2["Harbor (external)"]
+    HS8888 -->|helm push| EXT_HARBOR2
+
+    style ING fill:#457b9d,color:#fff
+    style N8080 fill:#2d6a4f,color:#fff
+    style HS8888 fill:#264653,color:#fff
+    style EXT_HARBOR2 fill:#e76f51,color:#fff
+```
 
 ## How It Works
 
@@ -31,32 +116,32 @@ Nginx reverse proxy with automatic Helm chart synchronization to Harbor. Proxies
 ```mermaid
 sequenceDiagram
     participant User
-    participant nginx
+    participant Proxy as nginx (proxy)
     participant Upstream as Upstream Helm Repo
-    participant Sidecar as helm-sync sidecar
-    participant Harbor
+    participant Sidecar as helm-sync (sidecar)
+    participant Harbor as Harbor (external)
 
-    User->>nginx: helm pull (charts.$DOMAIN/jetstack/cert-manager-v1.19.3.tgz)
-    activate nginx
-    nginx->>Upstream: Proxy request (charts.jetstack.io)
-    Upstream-->>nginx: chart .tgz (cached 1 day)
-    nginx-->>User: chart .tgz
+    User->>Proxy: GET /jetstack/cert-manager-v1.19.3.tgz
+    activate Proxy
+    Proxy->>Upstream: proxy_pass → charts.jetstack.io
+    Upstream-->>Proxy: chart .tgz (cached 1 day)
+    Proxy-->>User: chart .tgz
 
-    Note over nginx,Sidecar: Fire-and-forget mirror (1s timeout)
-    nginx--)Sidecar: POST /sync (X-Original-URI header)
-    deactivate nginx
+    Note over Proxy,Sidecar: nginx mirror — fire-and-forget (1s timeout)
+    Proxy--)Sidecar: /sync + X-Original-URI header
+    deactivate Proxy
 
     activate Sidecar
-    Sidecar->>Sidecar: Parse .tgz filename → chart + version
-    Sidecar->>Sidecar: Lookup chart in charts.manifest
-    Sidecar->>Harbor: Check artifact exists? (API)
-    alt Chart missing from Harbor
-        Sidecar->>Upstream: helm pull chart
-        Sidecar->>Harbor: Create project (if needed)
-        Sidecar->>Harbor: helm push (OCI artifact)
+    Sidecar->>Sidecar: Parse filename → cert-manager + v1.19.3
+    Sidecar->>Sidecar: Lookup in charts.manifest
+    Sidecar->>Harbor: GET /api/v2.0/.../artifacts (exists?)
+    alt Not in Harbor
+        Sidecar->>Harbor: Create project charts.jetstack.io
+        Sidecar->>Upstream: helm pull cert-manager v1.19.3
+        Sidecar->>Harbor: helm push → OCI artifact
         Note over Harbor: oci://harbor/charts.jetstack.io/cert-manager:v1.19.3
-    else Already in Harbor
-        Sidecar->>Sidecar: Skip (log OK)
+    else Already exists
+        Sidecar->>Sidecar: Skip (already synced)
     end
     deactivate Sidecar
 ```
@@ -65,44 +150,46 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[Helm Chart Needed] --> B{Chart Source Type?}
+    A["Need a Helm chart"] --> B{"What type of<br/>chart repo?"}
 
-    B -->|HTTP Helm Repo| C[Pull via nginx proxy]
-    C --> D[charts.$DOMAIN/jetstack/cert-manager-v1.19.3.tgz]
-    D --> E[nginx caches + mirrors to sidecar]
-    E --> F[helm-sync pushes to Harbor as OCI]
-    F --> G[Available at oci://harbor/$PROJECT/$CHART]
+    B -->|"HTTP repo<br/>(jetstack, hashicorp, ...)"| C["Pull through nginx proxy"]
+    C --> D["charts.DOMAIN/jetstack/cert-manager-v1.19.3.tgz"]
+    D --> E["nginx caches response<br/>+ mirrors request to sidecar"]
+    E --> F["helm-sync checks Harbor<br/>pulls + pushes if missing"]
+    F --> G["Available as OCI artifact<br/>oci://harbor/PROJECT/CHART:VERSION"]
 
-    B -->|OCI Registry| H[Pull via Harbor proxy-cache]
-    H --> I[helm pull oci://harbor/ghcr.io/argoproj/argo-helm/argo-cd]
-    I --> J[Harbor proxies + caches from upstream]
+    B -->|"OCI registry<br/>(ghcr.io, docker.io, ...)"| H["Pull through Harbor proxy-cache"]
+    H --> I["helm pull oci://harbor/ghcr.io/.../argo-cd"]
+    I --> J["Harbor proxies + caches<br/>from upstream OCI registry"]
     J --> G
 
-    style C fill:#4a9,stroke:#333
-    style H fill:#49a,stroke:#333
-    style G fill:#fa4,stroke:#333
+    style C fill:#2d6a4f,color:#fff
+    style H fill:#264653,color:#fff
+    style G fill:#e76f51,color:#fff
+    style E fill:#2d6a4f,color:#fff
+    style F fill:#264653,color:#fff
+    style J fill:#e76f51,color:#fff
 ```
 
-### Request Lifecycle (nginx mirror)
+### Request Lifecycle (nginx mirror detail)
 
 ```mermaid
 flowchart LR
-    A[Client Request] --> B[nginx location block]
-    B --> C{proxy_pass to upstream}
-    B --> D{mirror /mirror-sync}
+    A["Client<br/>helm pull"] --> B["nginx<br/>location /jetstack/"]
 
-    C --> E[Upstream Helm Repo]
-    E --> F[Response to client]
+    B --> C["proxy_pass<br/>charts.jetstack.io"]
+    C --> D["Upstream responds<br/>with .tgz"]
+    D --> E["Client receives<br/>chart (cached)"]
 
-    D --> G[internal location]
-    G --> H[proxy_pass helm-sync:8888/sync]
-    H --> I[helm-sync handler]
+    B -.-> F["mirror /mirror-sync<br/>(async, non-blocking)"]
+    F -.-> G["internal location<br/>proxy_pass localhost:8888"]
+    G -.-> H["helm-sync /sync<br/>handler"]
+    H -.-> I["Background:<br/>check + push to Harbor"]
 
-    style D fill:#ffa,stroke:#333
-    style G fill:#ffa,stroke:#333
-
-    Note1[/"mirror is fire-and-forget
-    1s timeout, non-blocking"/]
+    style F fill:#ffa,stroke:#333,color:#333
+    style G fill:#ffa,stroke:#333,color:#333
+    style H fill:#264653,color:#fff
+    style I fill:#e76f51,color:#fff
 ```
 
 ## Prerequisites
