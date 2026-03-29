@@ -1,0 +1,147 @@
+# Base domain for all proxy hostnames
+domain: example.com
+
+# Harbor registry (external)
+harbor:
+  host: harbor.example.com
+  # Use existingSecret to reference a pre-created Secret with HARBOR_USER and HARBOR_PASS keys
+  existingSecret: ""
+  # Or set credentials directly (ignored if existingSecret is set)
+  user: "robot$helm-sync"
+  pass: "changeme"
+
+# Proxy (nginx + helm-sync sidecar)
+proxy:
+  replicaCount: 1
+  image:
+    nginx: nginx:1.27-alpine
+    helmSync:
+      repository: ""  # Built from helm-sync/Dockerfile — set to your registry
+      tag: latest
+      pullPolicy: IfNotPresent
+  resources:
+    nginx:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    helmSync:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  cache:
+    rpm:
+      size: 20Gi
+      storageClass: ""
+    charts:
+      size: 2Gi
+      storageClass: ""
+    downloads:
+      size: 30Gi
+      storageClass: ""
+
+# Bootstrap container registry
+registry:
+  enabled: true
+  replicaCount: 1
+  image: registry:2
+  storage:
+    size: 50Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  tls:
+    enabled: true
+    secretName: proxy-tls
+
+# Static binary files
+binaries:
+  # Mount a PVC or hostPath with pre-downloaded binaries
+  enabled: false
+  existingClaim: ""
+
+# Helm charts manifest — HTTP repos to proxy and sync
+# Each entry: source URL, version, harbor project, chart name, env var name
+charts:
+  - source: https://charts.jetstack.io
+    version: v1.19.3
+    harborProject: charts.jetstack.io
+    name: cert-manager
+    envVar: HELM_OCI_CERT_MANAGER
+    locationPath: /jetstack/
+  - source: https://cloudnative-pg.github.io/charts
+    version: "0.27.1"
+    harborProject: cloudnative-pg.github.io
+    name: cloudnative-pg
+    envVar: HELM_OCI_CNPG
+    locationPath: /cnpg/
+  - source: https://helm.releases.hashicorp.com
+    version: "0.32.0"
+    harborProject: helm.releases.hashicorp.com
+    name: vault
+    envVar: HELM_OCI_VAULT
+    locationPath: /hashicorp/
+  - source: https://helm.goharbor.io
+    version: "1.18.2"
+    harborProject: helm.goharbor.io
+    name: harbor
+    envVar: HELM_OCI_HARBOR
+    locationPath: /goharbor/
+  - source: https://prometheus-community.github.io/helm-charts
+    version: "72.6.2"
+    harborProject: prometheus-community.github.io
+    name: kube-prometheus-stack
+    envVar: HELM_OCI_KPS
+    locationPath: /prometheus-community/
+  - source: https://external-secrets.io
+    version: latest
+    harborProject: charts.external-secrets.io
+    name: external-secrets
+    envVar: HELM_OCI_EXTERNAL_SECRETS
+    locationPath: /external-secrets/
+  - source: https://kubernetes.github.io/autoscaler
+    version: latest
+    harborProject: kubernetes.github.io
+    name: cluster-autoscaler
+    envVar: HELM_OCI_CLUSTER_AUTOSCALER
+    locationPath: /autoscaler/
+  - source: https://ot-container-kit.github.io/helm-charts/
+    version: latest
+    harborProject: ot-container-kit.github.io
+    name: redis-operator
+    envVar: HELM_OCI_REDIS_OPERATOR
+    locationPath: /ot-helm/
+  - source: https://helm.kasmweb.com/
+    version: "1.1181.0"
+    harborProject: helm.kasmweb.com
+    name: kasm
+    envVar: HELM_OCI_KASM
+    locationPath: /kasmtech/
+  - source: https://charts.gitlab.io
+    version: latest
+    harborProject: charts.gitlab.io
+    name: gitlab-runner
+    envVar: HELM_OCI_GITLAB_RUNNER
+    locationPath: /gitlab/
+  - source: https://mariadb-operator.github.io/mariadb-operator
+    version: latest
+    harborProject: mariadb-operator.github.io
+    name: mariadb-operator
+    envVar: HELM_OCI_MARIADB_OPERATOR
+    locationPath: /mariadb-operator/

@@ -1,0 +1,18 @@
+{{- if .Values.registry.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helm-harbor-sync.fullname" . }}-registry
+  labels:
+    {{- include "helm-harbor-sync.labels" . | nindent 4 }}
+    app.kubernetes.io/component: registry
+spec:
+  selector:
+    {{- include "helm-harbor-sync.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: registry
+  ports:
+    - name: registry
+      port: 5000
+      targetPort: 5000
+      protocol: TCP
+{{- end }}

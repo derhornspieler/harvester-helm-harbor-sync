@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helm-harbor-sync.fullname" . }}-proxy
+  labels:
+    {{- include "helm-harbor-sync.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: {{ .Values.proxy.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "helm-harbor-sync.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: proxy
+  template:
+    metadata:
+      labels:
+        {{- include "helm-harbor-sync.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: proxy
+      annotations:
+        checksum/nginx-main: {{ include (print $.Template.BasePath "/configmap-nginx-main.yaml") . | sha256sum }}
+        checksum/nginx-confd: {{ include (print $.Template.BasePath "/configmap-nginx-confd.yaml") . | sha256sum }}
+        checksum/nginx-includes: {{ include (print $.Template.BasePath "/configmap-nginx-includes.yaml") . | sha256sum }}
+        checksum/charts-manifest: {{ include (print $.Template.BasePath "/configmap-charts-manifest.yaml") . | sha256sum }}
+    spec:
+      containers:
+        # --- nginx reverse proxy ---
+        - name: nginx
+          image: {{ .Values.proxy.image.nginx }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: healthcheck
+              containerPort: 8081
+              protocol: TCP
+          volumeMounts:
+            - name: nginx-main
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: nginx-confd
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+            - name: nginx-includes
+              mountPath: /etc/nginx/includes
+              readOnly: true
+            - name: cache-rpm
+              mountPath: /var/cache/nginx/rpm
+            - name: cache-charts
+              mountPath: /var/cache/nginx/charts
+            - name: cache-downloads
+              mountPath: /var/cache/nginx/downloads
+            {{- if .Values.binaries.enabled }}
+            - name: binaries
+              mountPath: /srv/bin
+              readOnly: true
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.proxy.resources.nginx | nindent 12 }}
+
+        # --- helm-sync sidecar ---
+        - name: helm-sync
+          image: "{{ .Values.proxy.image.helmSync.repository }}:{{ .Values.proxy.image.helmSync.tag }}"
+          imagePullPolicy: {{ .Values.proxy.image.helmSync.pullPolicy }}
+          ports:
+            - name: sync
+              containerPort: 8888
+              protocol: TCP
+          env:
+            - name: HARBOR_HOST
+              value: {{ .Values.harbor.host | quote }}
+            - name: HARBOR_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "helm-harbor-sync.harborSecretName" . }}
+                  key: HARBOR_USER
+            - name: HARBOR_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "helm-harbor-sync.harborSecretName" . }}
+                  key: HARBOR_PASS
+            - name: HELM_SYNC_PORT
+              value: "8888"
+          volumeMounts:
+            - name: charts-manifest
+              mountPath: /opt/helm-sync/charts.manifest
+              subPath: charts.manifest
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8888
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8888
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.proxy.resources.helmSync | nindent 12 }}
+
+      volumes:
+        - name: nginx-main
+          configMap:
+            name: {{ include "helm-harbor-sync.fullname" . }}-nginx-main
+        - name: nginx-confd
+          configMap:
+            name: {{ include "helm-harbor-sync.fullname" . }}-nginx-confd
+        - name: nginx-includes
+          configMap:
+            name: {{ include "helm-harbor-sync.fullname" . }}-nginx-includes
+        - name: charts-manifest
+          configMap:
+            name: {{ include "helm-harbor-sync.fullname" . }}-charts-manifest
+        - name: cache-rpm
+          persistentVolumeClaim:
+            claimName: {{ include "helm-harbor-sync.fullname" . }}-cache-rpm
+        - name: cache-charts
+          persistentVolumeClaim:
+            claimName: {{ include "helm-harbor-sync.fullname" . }}-cache-charts
+        - name: cache-downloads
+          persistentVolumeClaim:
+            claimName: {{ include "helm-harbor-sync.fullname" . }}-cache-downloads
+        {{- if .Values.binaries.enabled }}
+        - name: binaries
+          persistentVolumeClaim:
+            claimName: {{ .Values.binaries.existingClaim | default (printf "%s-binaries" (include "helm-harbor-sync.fullname" .)) }}
+        {{- end }}

@@ -1,0 +1,20 @@
+{{- $fullname := include "helm-harbor-sync.fullname" . -}}
+{{- $labels := include "helm-harbor-sync.labels" . -}}
+{{- range $name, $config := dict "rpm" .Values.proxy.cache.rpm "charts" .Values.proxy.cache.charts "downloads" .Values.proxy.cache.downloads }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-cache-{{ $name }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $config.size }}
+  {{- if $config.storageClass }}
+  storageClassName: {{ $config.storageClass | quote }}
+  {{- end }}
+{{- end }}
